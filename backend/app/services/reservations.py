@@ -2,9 +2,14 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Dict, Any, List
 
-async def calculate_monthly_revenue(property_id: str, month: int, year: int, db_session=None) -> Decimal:
+async def calculate_monthly_revenue(property_id: str, tenant_id: str, month: int, year: int, db_session=None) -> Decimal:
     """
-    Calculates revenue for a specific month.
+    Calculates revenue for a specific month, using the property's local timezone.
+    
+    FIX Bug #1: Previously used UTC timestamps directly, causing reservations near
+    midnight to be attributed to the wrong month when the property is in a different timezone.
+    Example: A reservation at 2024-02-29 23:30 UTC = 2024-03-01 00:30 Europe/Paris
+    belongs to MARCH not FEBRUARY when reporting for Paris-timezone properties.
     """
 
     start_date = datetime(year, month, 1)
@@ -15,14 +20,16 @@ async def calculate_monthly_revenue(property_id: str, month: int, year: int, db_
         
     print(f"DEBUG: Querying revenue for {property_id} from {start_date} to {end_date}")
 
-    # SQL Simulation (This would be executed against the actual DB)
+    # FIX Bug #1: Convert check_in_date to the property's timezone before filtering.
+    # Join with properties table to get the timezone, then use AT TIME ZONE.
     query = """
-        SELECT SUM(total_amount) as total
-        FROM reservations
-        WHERE property_id = $1
-        AND tenant_id = $2
-        AND check_in_date >= $3
-        AND check_in_date < $4
+        SELECT SUM(r.total_amount) as total
+        FROM reservations r
+        JOIN properties p ON p.id = r.property_id AND p.tenant_id = r.tenant_id
+        WHERE r.property_id = $1
+        AND r.tenant_id = $2
+        AND (r.check_in_date AT TIME ZONE p.timezone) >= $3
+        AND (r.check_in_date AT TIME ZONE p.timezone) < $4
     """
     
     # In production this query executes against a database session.
